@@ -1,0 +1,2145 @@
+package client
+
+// Only the following imports are allowed! ANY additional imports
+// may break the autograder!
+// - bytes
+// - encoding/hex
+// - encoding/json
+// - errors
+// - fmt
+// - github.com/cs161-staff/project2-userlib
+// - github.com/google/uuid
+// - strconv
+// - strings
+
+import (
+	"bytes"
+	"encoding/json"
+
+	userlib "github.com/cs161-staff/project2-userlib"
+	"github.com/google/uuid"
+
+	// hex.EncodeToString(...) is useful for converting []byte to string
+
+	// Useful for string manipulation
+
+	// Useful for formatting strings (e.g. `fmt.Sprintf`).
+	"fmt"
+
+	// Useful for creating new error messages to return using errors.New("...")
+	"errors"
+
+	// Optional.
+	_ "strconv"
+)
+
+// This serves two purposes: it shows you a few useful primitives,
+// and suppresses warnings for imports not being used. It can be
+// safely deleted!
+func someUsefulThings() {
+
+	// Creates a random UUID.
+	randomUUID := uuid.New()
+
+	// Prints the UUID as a string. %v prints the value in a default format.
+	// See https://pkg.go.dev/fmt#hdr-Printing for all Golang format string flags.
+	userlib.DebugMsg("Random UUID: %v", randomUUID.String())
+
+	// Creates a UUID deterministically, from a sequence of bytes.
+	hash := userlib.Hash([]byte("user-structs/alice"))
+	deterministicUUID, err := uuid.FromBytes(hash[:16])
+	if err != nil {
+		// Normally, we would `return err` here. But, since this function doesn't return anything,
+		// we can just panic to terminate execution. ALWAYS, ALWAYS, ALWAYS check for errors! Your
+		// code should have hundreds of "if err != nil { return err }" statements by the end of this
+		// project. You probably want to avoid using panic statements in your own code.
+		panic(errors.New("An error occurred while generating a UUID: " + err.Error()))
+	}
+	userlib.DebugMsg("Deterministic UUID: %v", deterministicUUID.String())
+
+	// Declares a Course struct type, creates an instance of it, and marshals it into JSON.
+	type Course struct {
+		name      string
+		professor []byte
+	}
+
+	course := Course{"CS 161", []byte("Nicholas Weaver")}
+	courseBytes, err := json.Marshal(course)
+	if err != nil {
+		panic(err)
+	}
+
+	userlib.DebugMsg("Struct: %v", course)
+	userlib.DebugMsg("JSON Data: %v", courseBytes)
+
+	// Generate a random private/public keypair.
+	// The "_" indicates that we don't check for the error case here.
+	var pk userlib.PKEEncKey
+	var sk userlib.PKEDecKey
+	pk, sk, _ = userlib.PKEKeyGen()
+	userlib.DebugMsg("PKE Key Pair: (%v, %v)", pk, sk)
+
+	// Here's an example of how to use HBKDF to generate a new key from an input key.
+	// Tip: generate a new key everywhere you possibly can! It's easier to generate new keys on the fly
+	// instead of trying to think about all of the ways a key reuse attack could be performed. It's also easier to
+	// store one key and derive multiple keys from that one key, rather than
+	originalKey := userlib.RandomBytes(16)
+	derivedKey, err := userlib.HashKDF(originalKey, []byte("mac-key"))
+	if err != nil {
+		panic(err)
+	}
+	userlib.DebugMsg("Original Key: %v", originalKey)
+	userlib.DebugMsg("Derived Key: %v", derivedKey)
+
+	// A couple of tips on converting between string and []byte:
+	// To convert from string to []byte, use []byte("some-string-here")
+	// To convert from []byte to string for debugging, use fmt.Sprintf("hello world: %s", some_byte_arr).
+	// To convert from []byte to string for use in a hashmap, use hex.EncodeToString(some_byte_arr).
+	// When frequently converting between []byte and string, just marshal and unmarshal the data.
+	//
+	// Read more: https://go.dev/blog/strings
+
+	// Here's an example of string interpolation!
+	_ = fmt.Sprintf("%s_%d", "file", 1)
+}
+
+// This is the type definition for the User struct.
+// A Go struct is like a Python or Java class - it can have attributes
+// (e.g. like the Username attribute) and methods (e.g. like the StoreFile method below).
+type User struct {
+	Username       string
+	PassHash       []byte
+	PrivateKey     userlib.PKEDecKey
+	PrivateSignKey userlib.DSSignKey
+
+	// You can add other attributes here if you want! But note that in order for attributes to
+	// be included when this struct is serialized to/from JSON, they must be capitalized.
+	// On the flipside, if you have an attribute that you want to be able to access from
+	// this struct's methods, but you DON'T want that value to be included in the serialized value
+	// of this struct that's stored in datastore, then you can use a "private" variable (e.g. one that
+	// begins with a lowercase letter).
+}
+
+type Pair struct {
+	Signature  []byte
+	Cyphertext []byte
+}
+
+// the end of File's last linked list node will be padded with bytes with the value x = 128 - numBytes
+// there will be a 128-byte block filled with the number 128 to prevent final byte padding confusion
+// ^ for example if the last byte is a 1, we would be confused as to whether that was intentional or padding
+type File struct {
+	NodeCount int          // Number of nodes in File including the final
+	FileStart userlib.UUID // Pointer to first 128-byte linked list node
+	FileEnd   userlib.UUID // Pointer to SECOND TO LAST 128-byte linked list node - use this to append
+}
+
+type ContentNode struct { //
+	Content  []byte
+	NextUUID uuid.UUID
+}
+
+// UUID of Invitation struct = Hash(Hash(username) || Hash(filename))
+type Invitation struct {
+	Sender                   string
+	Recipient                string
+	SharedStructKey          []byte
+	SharedStructSignatureKey []byte
+	SharedStructPointer      userlib.UUID
+}
+
+type SOI interface {
+	IsOwner() bool
+}
+
+// FileKey = HashKDF(sourceKey []byte, []byte("File Key Derivation")])
+// Source key could be the second 16 bytes of the hash of username + password
+// purpose key could be fileName instead
+
+// UUID of Sentinel struct = same as Invitation
+// Sentinel struct is encrypted/decrypted using the private and public keys of the user
+type Sentinel struct {
+	Type                     string
+	SharedStructKey          []byte
+	SharedStructSignatureKey []byte
+	SharedStructPointer      userlib.UUID
+}
+
+func (Sentinel) IsOwner() bool {
+	return false
+}
+
+/*
+SharedWith contains a username : uuid of username's sharedStruct
+SSEncryptionKeys contains a username : symmetric encryption key to that struct
+SSSignatureKeys contains a username : symmetric signature key to that struct
+Owner struct is encrypted/decrypted using the private and public keys of the user
+*/
+type Owner struct {
+	Type             string
+	SharedWith       userlib.UUID // Pointer to a dictionary (usually encrypted and signed)
+	SSEncryptionKeys userlib.UUID // Pointer to a dictionary (usually encrypted and signed)
+	SSSignatureKeys  userlib.UUID // Pointer to a dictionary (usually encrypted and signed)
+	FileEncDecKey    []byte
+	FileMACKey       []byte
+	FilePointer      userlib.UUID
+}
+
+func (Owner) IsOwner() bool {
+	return true
+}
+
+type SharedUsers struct {
+	ShareUUID map[string]userlib.UUID // username : uuid of username's sharedStruct for the relevant file
+}
+
+type SSEncryptionKeys struct {
+	ShareKey map[string][]byte // username : symmetric key to the relevant struct in SharedUsers
+}
+
+type SSSignatureKeys struct {
+	ShareKey map[string][]byte // username : symmetric key to the relevant struct in SharedUsers
+}
+
+type Shared struct {
+	FileEncDecKey []byte
+	FileMACKey    []byte
+	FilePointer   userlib.UUID
+}
+
+// NOTE: The following methods have toy (insecure!) implementations.
+// t := reflect.TypeOf(userdata)
+// fmt.Println("Type of &userdata:", t) // Output: Type: string
+// fmt.Println("userdata.Username = ", userdata.Username)
+
+func InitUser(username string, password string) (userdataptr *User, err error) {
+	// Test if username is empty
+	if username == "" {
+		err = errors.New("username empty - inituser")
+		return nil, err
+	}
+	// Test if username is taken
+	_, okBool := userlib.KeystoreGet(username)
+	if okBool {
+		err = errors.New("username taken or is a key - inituser")
+		return nil, err
+	}
+
+	var userdata User
+
+	// Add user struct values
+	userdata.Username = username
+	userdata.PassHash = userlib.Argon2Key([]byte(password), []byte(username), 16)
+
+	// Create and upload user's keys
+	publicKey, privateKey, err := userlib.PKEKeyGen() // (DSSignKey, DSVerifyKey, error)
+	if err != nil {
+		err = errors.New("pkekeygen error - inituser")
+		return nil, err
+	}
+	userdata.PrivateKey = privateKey
+	privateSignKey, publicVerifyKey, err := userlib.DSKeyGen()
+	if err != nil {
+		err = errors.New("dskkeygen error - inituser")
+		return nil, err
+	}
+	userdata.PrivateSignKey = privateSignKey
+	err = userlib.KeystoreSet(username, publicKey)
+	if err != nil {
+		err = errors.New("keystoreset error username - inituser")
+		return nil, err
+	}
+	err = userlib.KeystoreSet(username+"PublicVerifyKey", publicVerifyKey)
+	if err != nil {
+		err = errors.New("keystoreset error username+publicverifykey - inituser")
+		return nil, err
+	}
+
+	// Marshal, encrypt and sign userdata struct
+	userStructMarshal, err := json.Marshal(userdata)
+	if err != nil {
+		err = errors.New("marshal(userdata) error - inituser")
+		return nil, err
+	}
+	entryMarshal, err := hybridEncryptAndSign(userStructMarshal, userdata.PassHash, privateSignKey)
+	if err != nil {
+		err = errors.New("hybrid-encrypt-and-sign on userdata struct failed - inituser")
+		return nil, err
+	}
+	// Insert struct into dataStore
+	// Hash username and take the first 16 bytes of usernameHash to make UUID.
+	usernameHash := userlib.Hash([]byte(username))
+	usernameUUID, err := uuid.FromBytes(usernameHash[:16])
+	if err != nil {
+		err = errors.New("uuid.frombytes(username) error - inituser")
+		return nil, err
+	}
+	userlib.DatastoreSet(usernameUUID, entryMarshal)
+
+	return &userdata, nil
+}
+
+func GetUser(username string, password string) (userdataptr *User, err error) {
+	_, okBool := userlib.KeystoreGet(username)
+	if !okBool {
+		err = errors.New("username doesn't exist - getuser")
+		return nil, err
+	}
+	// Hash username and take the first 16 bytes of usernameHash to make UUID.
+	usernameHash := userlib.Hash([]byte(username))
+	usernameUUID, err := uuid.FromBytes(usernameHash[:16])
+	if err != nil {
+		err = errors.New("uuid.frombytes error - getuser")
+		return nil, err
+	}
+	potentialPassHash := userlib.Argon2Key([]byte(password), []byte(username), 16)
+	pubKey, okBool := userlib.KeystoreGet(username + "PublicVerifyKey")
+	if !okBool {
+		err = errors.New("can't keystoreget public signature key - getuser")
+		return nil, err
+	}
+	userMarshal, err := hybridVerifyAndDecrypt(usernameUUID, potentialPassHash, pubKey)
+	if err != nil {
+		err = errors.New("hybrid-verify-and-decrypt error - getuser")
+		return nil, err
+	}
+	// Unmarshal User struct
+	var userdata User
+	err = json.Unmarshal(userMarshal, &userdata)
+	if err != nil {
+		err = errors.New("unmarshal(decrypted cyphertext) error - getuser")
+		return nil, err
+	}
+
+	// Check potentialPassHash against userdata.passhash
+	okBool = bytes.Equal(potentialPassHash, userdata.PassHash)
+	if !okBool {
+		err = errors.New("incorrect password for the username given - getuser")
+		return nil, err
+	}
+
+	userdataptr = &userdata
+	return userdataptr, nil
+}
+
+// Must create Owner struct
+// TODO: Handle overwriting duplicate filenames and handling empty filenames
+func (userdata *User) StoreFile(filename string, content []byte) (err error) {
+	// 1. Verify user struct integrity
+	usernameHash := userlib.Hash([]byte(userdata.Username))
+	usernameUUID, err := uuid.FromBytes(usernameHash[:16])
+	if err != nil {
+		return errors.New("uuid.frombytes error - storefile")
+	}
+
+	// Get user's public verification key
+	pubVerifyKey, ok := userlib.KeystoreGet(userdata.Username + "PublicVerifyKey")
+	if !ok {
+		return errors.New("can't get public verification key - storefile")
+	}
+
+	// Verify user struct integrity
+	_, err = hybridVerifyAndDecrypt(usernameUUID, userdata.PassHash, pubVerifyKey)
+	if err != nil {
+		return errors.New("user struct verification failed - storefile")
+	}
+
+	// 2. Create and store the File struct
+	fileUUID := uuid.New() // Random UUID for the file struct
+	randBytes := userlib.RandomBytes(16)
+	fileEncKey64, err := userlib.HashKDF(randBytes, []byte("FileEncryption"))
+	if err != nil {
+		return errors.New("file-sym-key creation failed - storefile")
+	}
+	fileEncKey := fileEncKey64[:16]
+	fileMACKey64, err := userlib.HashKDF(randBytes, []byte("FileSignature"))
+	if err != nil {
+		return errors.New("file-signature-key creation failed - storefile")
+	}
+	fileMACKey := fileMACKey64[:16]
+
+	// Create content nodes
+	firstUUID, lastUUID, err := createContentNodes(content, fileEncKey, fileMACKey)
+	if err != nil {
+		return err
+	}
+
+	// Count nodes based on content length
+	nodeCount := (len(content) / 128) + 1
+	if len(content)%128 == 0 {
+		nodeCount++ // Add one for sentinel node
+	}
+
+	// Create File struct
+	fileStruct := File{
+		NodeCount: nodeCount,
+		FileStart: firstUUID, // UUID for first content node
+		FileEnd:   lastUUID,  // Same as FileStart initially
+	}
+
+	// Encrypt and store File struct
+	fileStructBytes, err := json.Marshal(fileStruct)
+	if err != nil {
+		return errors.New("file struct marshal failed - storefile")
+	}
+
+	// encFileStruct here is a marshalled pair struct
+	encFileStruct, err := symEncryptAndSign(fileStructBytes, fileEncKey, fileMACKey)
+	if err != nil {
+		return errors.New("file struct encrypt-and-sign failed - storefile")
+	}
+
+	userlib.DatastoreSet(fileUUID, encFileStruct)
+
+	// 3. Create/Update Owner struct
+	// Generate deterministic UUID for owner struct (hash of username+filename)
+	filenameHash := userlib.Hash([]byte(filename))
+	usernameHash = userlib.Hash([]byte(userdata.Username))
+	concatenation := append(usernameHash, filenameHash...)
+	userHash := userlib.Hash(concatenation)
+	ownerUUID, err := uuid.FromBytes(userHash[:16])
+	if err != nil {
+		err = errors.New("uuid frombytes error for owner struct uuid - storefile")
+		return err
+
+	}
+
+	// Create Owner struct
+	var ownerStruct Owner
+	ownerStruct.Type = "owner"
+	ownerStruct.FilePointer = fileUUID        // Points to the File struct
+	ownerStruct.FileEncDecKey = fileEncKey    // Key to decrypt File struct
+	ownerStruct.FileMACKey = fileMACKey       // Key to verify File struct MAC
+	ownerStruct.SharedWith = uuid.New()       // UUID for shared users dictionary
+	ownerStruct.SSEncryptionKeys = uuid.New() // UUID for encryption keys dictionary
+	ownerStruct.SSSignatureKeys = uuid.New()  // UUID for signature keys dictionary
+
+	// ownerStruct := Owner {
+	// 	FilePointer:      fileUUID,   // Points to the File struct
+	// 	FileEncDecKey:    fileEncKey, // Key to decrypt File struct
+	// 	FileMACKey:       fileMACKey, // Key to verify File struct MAC
+	// 	SharedWith:       uuid.New(), // UUID for shared users dictionary
+	// 	SSEncryptionKeys: uuid.New(), // UUID for encryption keys dictionary
+	// 	SSSignatureKeys:  uuid.New(), // UUID for signature keys dictionary
+	// }
+
+	// Fetch user's public key
+	pubKey, ok := userlib.KeystoreGet(userdata.Username)
+	if !ok {
+		return errors.New("failed to get user's public key - storefile")
+	}
+
+	// Store SharedUsers Struct
+	var sharedUsersStruct SharedUsers
+	sharedUsersStruct.ShareUUID = make(map[string]userlib.UUID)
+	marshalSharedUsers, err := json.Marshal(sharedUsersStruct)
+	if err != nil {
+		return errors.New("shared-users-struct marshal failed - storefile")
+	}
+
+	marshalSharedUsersPair, err := pubEncryptAndSign(marshalSharedUsers, pubKey, userdata.PrivateSignKey)
+	if err != nil {
+		return errors.New("shared-users-struct pub-encrypt-and-sign failed - storefile")
+	}
+
+	userlib.DatastoreSet(ownerStruct.SharedWith, marshalSharedUsersPair)
+
+	// Store SSEncryptionKeys Struct
+	var ssEncStruct SSEncryptionKeys
+	ssEncStruct.ShareKey = make(map[string][]byte)
+	marshalEncStruct, err := json.Marshal(ssEncStruct)
+	if err != nil {
+		return errors.New("ss-enc-struct marshal failed - storefile")
+	}
+
+	marshalEncStructPair, err := pubEncryptAndSign(marshalEncStruct, pubKey, userdata.PrivateSignKey)
+	if err != nil {
+		return errors.New("ss-enc-struct pub-encrypt-and-sign failed - storefile")
+	}
+
+	userlib.DatastoreSet(ownerStruct.SSEncryptionKeys, marshalEncStructPair)
+
+	// Store SSSignatureKeys Struct
+	var ssSigKeyStruct SSEncryptionKeys
+	ssSigKeyStruct.ShareKey = make(map[string][]byte)
+	marshalSSSigKeyStruct, err := json.Marshal(ssSigKeyStruct)
+	if err != nil {
+		return errors.New("ss-signature-keys-struct marshal failed - storefile")
+	}
+
+	marshalSSSigKeyStructPair, err := pubEncryptAndSign(marshalSSSigKeyStruct, pubKey, userdata.PrivateSignKey)
+	if err != nil {
+		return errors.New("ss-signature-keys-struct pub-encrypt-and-sign failed - storefile")
+	}
+
+	userlib.DatastoreSet(ownerStruct.SSSignatureKeys, marshalSSSigKeyStructPair)
+
+	userlib.DatastoreSet(ownerStruct.SSSignatureKeys, marshalSSSigKeyStructPair)
+
+	// Encrypt and store Owner struct
+	ownerBytes, err := json.Marshal(ownerStruct)
+	if err != nil {
+		return errors.New("owner struct marshal failed - storefile")
+	}
+
+	// Asymmetric Encryption of Owner Struct
+	encOwnerBytes, err := pubEncryptAndSign(ownerBytes, pubKey, userdata.PrivateSignKey)
+	// encOwnerBytes, err := hybridEncryptAndSign(ownerBytes, userdata.PassHash, userdata.PrivateSignKey)
+
+	if err != nil {
+		return err
+		// return errors.New("owner struct encryption failed - storefile")
+
+	}
+
+	userlib.DatastoreSet(ownerUUID, encOwnerBytes)
+
+	return nil
+}
+
+func (userdata *User) AppendToFile(filename string, content []byte) error {
+	// PART 1: USER AUTHENTICATION & VERIFICATION
+	usernameHash := userlib.Hash([]byte(userdata.Username))
+	usernameUUID, err := uuid.FromBytes(usernameHash[:16])
+	if err != nil {
+		return errors.New("uuid.frombytes error - appendtofile")
+	}
+
+	// Get user's public verification key
+	pubVerifyKey, ok := userlib.KeystoreGet(userdata.Username + "PublicVerifyKey")
+	if !ok {
+		return errors.New("can't get public verification key - appendtofile")
+	}
+
+	// Verify user struct integrity
+	_, err = hybridVerifyAndDecrypt(usernameUUID, userdata.PassHash, pubVerifyKey)
+	if err != nil {
+		return errors.New("user struct verification failed - appendtofile")
+	}
+
+	// PART 2: GET AND VERIFY OWNER/SENTINEL STRUCT
+	filenameHash := userlib.Hash([]byte(filename))
+	usernameHash = userlib.Hash([]byte(userdata.Username))
+	concatenation := append(usernameHash, filenameHash...)
+	userHash := userlib.Hash(concatenation)
+	structUUID, err := uuid.FromBytes(userHash[:16])
+	if err != nil {
+		err = errors.New("uuid frombytes error for struct uuid - appendtofile")
+		return err
+	}
+
+	structBytes, err := pubVerifyAndDecrypt(structUUID, userdata.PrivateKey, pubVerifyKey)
+	// structBytes, err := hybridVerifyAndDecrypt(structUUID, userdata.PassHash, pubVerifyKey)
+
+	if err != nil {
+		return errors.New("file does not exist or access denied - appendtofile")
+	}
+
+	// PART 3: GET FILE ACCESS INFORMATION
+	type typeStruct struct {
+		Type string
+	}
+	var tempStruct typeStruct
+	err = json.Unmarshal(structBytes, &tempStruct)
+	if err != nil {
+		return errors.New("struct type unmarshal failed - appendtofile")
+	}
+
+	// Variables to store file access information
+	var filePtr userlib.UUID // Points to the File struct
+	var fileKey []byte       // Key to decrypt file content
+	var fileMacKey []byte    // Key to verify file integrity
+
+	// PART 4: GET FILE ACCESS INFORMATION
+	// Different process for owners vs shared users
+
+	if tempStruct.Type == "owner" {
+		// User is the owner - process Owner struct
+		var ownerStruct Owner
+		err = json.Unmarshal(structBytes, &ownerStruct)
+		if err != nil {
+			return errors.New("owner struct unmarshal failed - appendtofile")
+		}
+
+		// Get file access info directly from Owner struct
+		filePtr = ownerStruct.FilePointer
+		fileKey = ownerStruct.FileEncDecKey
+		fileMacKey = ownerStruct.FileMACKey
+
+	} else if tempStruct.Type == "sentinel" {
+		// User is not owner - process Sentinel struct
+		var sentinelStruct Sentinel
+		err = json.Unmarshal(structBytes, &sentinelStruct)
+		if err != nil {
+			return errors.New("sentinel struct unmarshal failed - appendtofile")
+		}
+
+		// Get and verify the shared struct
+		sharedBytes, err := symVerifyAndDecrypt(
+			sentinelStruct.SharedStructPointer,
+			sentinelStruct.SharedStructKey,
+			sentinelStruct.SharedStructSignatureKey)
+		if err != nil {
+			return errors.New("shared struct verification failed - appendtofile")
+		}
+
+		// Get file access info from shared struct
+		var sharedStruct Shared
+		err = json.Unmarshal(sharedBytes, &sharedStruct)
+		if err != nil {
+			return errors.New("shared struct unmarshal failed - appendtofile")
+		}
+
+		filePtr = sharedStruct.FilePointer
+		fileKey = sharedStruct.FileEncDecKey
+		fileMacKey = sharedStruct.FileMACKey
+
+	} else {
+		return errors.New("invalid struct type - appendtofile")
+	}
+
+	// PART 4: GET AND VERIFY FILE STRUCT AND LAST NODE
+	fileStructBytes, err := symVerifyAndDecrypt(filePtr, fileKey, fileMacKey)
+	if err != nil {
+		return errors.New("file struct verification failed - appendtofile")
+	}
+
+	var file File
+	err = json.Unmarshal(fileStructBytes, &file)
+	if err != nil {
+		return errors.New("file struct unmarshal failed - appendtofile")
+	}
+
+	// Get last node
+	lastNodePairBytes, ok := userlib.DatastoreGet(file.FileEnd)
+	if !ok {
+		return errors.New("last node not found - appendtofile")
+	}
+
+	var lastNodePair Pair
+	err = json.Unmarshal(lastNodePairBytes, &lastNodePair)
+	if err != nil {
+		return errors.New("last node pair unmarshal failed - appendtofile")
+	}
+
+	// Verify last node integrity
+	lastNodeMAC, err := userlib.HMACEval(fileMacKey, lastNodePair.Cyphertext)
+	if err != nil {
+		return errors.New("last node mac generation failed - appendtofile")
+	}
+	if !userlib.HMACEqual(lastNodeMAC, lastNodePair.Signature) {
+		return errors.New("last node integrity check failed - appendtofile")
+	}
+
+	// Decrypt last node
+	lastNodeBytes := userlib.SymDec(fileKey, lastNodePair.Cyphertext)
+	var lastNode ContentNode
+	err = json.Unmarshal(lastNodeBytes, &lastNode)
+	if err != nil {
+		return errors.New("last node unmarshal failed - appendtofile")
+	}
+
+	// PART 5: OPTIMIZE LAST NODE SPACE
+	const NodeSize = 128
+	remainingContent := content
+
+	// Check for padding in last node
+	lastByte := lastNode.Content[NodeSize-1]
+	if lastByte < NodeSize {
+		// Remove padding
+		actualContentSize := NodeSize - int(lastByte)
+		oldContent := lastNode.Content[:actualContentSize]
+
+		// Calculate total new content size
+		totalNewSize := len(oldContent) + len(remainingContent)
+
+		userlib.DebugMsg("In AppendToFile: Old content size=%d, New content size=%d, Total=%d", len(oldContent), len(remainingContent), len(oldContent)+len(remainingContent))
+		userlib.DebugMsg("Padding size=%d", NodeSize-(len(oldContent)+len(remainingContent)))
+
+		if totalNewSize <= NodeSize {
+			// All content (existing + new) fits in one node
+			newContent := make([]byte, NodeSize)
+			copy(newContent, oldContent)
+			copy(newContent[len(oldContent):], remainingContent)
+
+			// Add padding to remaining space
+			padding := NodeSize - totalNewSize
+			for i := totalNewSize; i < NodeSize; i++ {
+				newContent[i] = byte(padding)
+			}
+
+			lastNode.Content = newContent
+			lastNode.NextUUID = file.FileEnd // Make sure NextUUID points to FileEnd
+			remainingContent = nil           // No remaining content to handle
+		} else {
+			// Fill current node completely
+			spaceAvailable := NodeSize - len(oldContent)
+			newContent := append(oldContent, remainingContent[:spaceAvailable]...)
+			lastNode.Content = newContent
+			remainingContent = remainingContent[spaceAvailable:]
+		}
+
+		// Store updated last node
+		lastNodeBytes, err = json.Marshal(lastNode)
+		if err != nil {
+			return errors.New("last node marshal failed - appendtofile")
+		}
+
+		lastNodeCipher := userlib.SymEnc(fileKey, userlib.RandomBytes(userlib.AESBlockSizeBytes), lastNodeBytes)
+		lastNodeMAC, err = userlib.HMACEval(fileMacKey, lastNodeCipher)
+		if err != nil {
+			return errors.New("last node mac failed - appendtofile")
+		}
+
+		lastNodePair = Pair{
+			Cyphertext: lastNodeCipher,
+			Signature:  lastNodeMAC,
+		}
+
+		lastNodePairBytes, err = json.Marshal(lastNodePair)
+		if err != nil {
+			return errors.New("last node pair marshal failed - appendtofile")
+		}
+
+		userlib.DatastoreSet(file.FileEnd, lastNodePairBytes)
+	}
+
+	// PART 6: HANDLE REMAINING CONTENT
+	if len(remainingContent) > 0 {
+		// Create new nodes for remaining content
+		firstNewUUID, lastNewUUID, err := createContentNodes(remainingContent, fileKey, fileMacKey)
+		if err != nil {
+			return err
+		}
+
+		// Link last node to new content
+		lastNode.NextUUID = firstNewUUID
+
+		lastNodeBytes, err = json.Marshal(lastNode)
+		if err != nil {
+			return errors.New("last node marshal failed - appendtofile")
+		}
+
+		lastNodeCipher := userlib.SymEnc(fileKey, userlib.RandomBytes(userlib.AESBlockSizeBytes), lastNodeBytes)
+		lastNodeMAC, err = userlib.HMACEval(fileMacKey, lastNodeCipher)
+		if err != nil {
+			return errors.New("last node mac failed - appendtofile")
+		}
+
+		lastNodePair = Pair{
+			Cyphertext: lastNodeCipher,
+			Signature:  lastNodeMAC,
+		}
+
+		lastNodePairBytes, err = json.Marshal(lastNodePair)
+		if err != nil {
+			return errors.New("last node pair marshal failed - appendtofile")
+		}
+
+		userlib.DatastoreSet(file.FileEnd, lastNodePairBytes)
+
+		// Update file struct
+		file.FileEnd = lastNewUUID
+		file.NodeCount += (len(remainingContent) / NodeSize) + 1
+	}
+
+	// PART 7: UPDATE AND STORE FILE STRUCT
+	fileStructBytes, err = json.Marshal(file)
+	if err != nil {
+		return errors.New("file struct marshal failed - appendtofile")
+	}
+
+	fileStructCipher := userlib.SymEnc(fileKey, userlib.RandomBytes(userlib.AESBlockSizeBytes), fileStructBytes)
+	fileStructMAC, err := userlib.HMACEval(fileMacKey, fileStructCipher)
+	if err != nil {
+		return errors.New("file struct mac failed - appendtofile")
+	}
+
+	fileStructPair := Pair{
+		Cyphertext: fileStructCipher,
+		Signature:  fileStructMAC,
+	}
+
+	fileStructPairBytes, err := json.Marshal(fileStructPair)
+	if err != nil {
+		return errors.New("file struct pair marshal failed - appendtofile")
+	}
+
+	userlib.DatastoreSet(filePtr, fileStructPairBytes)
+
+	return nil
+}
+
+func (userdata *User) LoadFile(filename string) (content []byte, err error) {
+	// PART 1: USER AUTHENTICATION & VERIFICATION
+	// Verify the integrity of user struct before any operations
+
+	// Generate deterministic UUID where user struct is stored
+	usernameHash := userlib.Hash([]byte(userdata.Username))
+	usernameUUID, err := uuid.FromBytes(usernameHash[:16])
+	if err != nil {
+		return nil, errors.New("uuid.frombytes error - loadfile")
+	}
+
+	// Get user's public verification key from Keystore
+	// This key is used to verify the signature on user's struct
+	pubVerifyKey, ok := userlib.KeystoreGet(userdata.Username + "PublicVerifyKey")
+	if !ok {
+		return nil, errors.New("can't get public verification key - loadfile")
+	}
+
+	// Verify and decrypt user struct
+	_, err = hybridVerifyAndDecrypt(usernameUUID, userdata.PassHash, pubVerifyKey)
+	if err != nil {
+		return nil, errors.New("user struct verification failed - loadfile")
+	}
+
+	// PART 2: LOCATE AND VERIFY FILE STRUCT
+	// Get the owner/sentinel struct for this file
+
+	// Generate deterministic struct UUID based on username+filename
+	filenameHash := userlib.Hash([]byte(filename))
+	usernameHash = userlib.Hash([]byte(userdata.Username))
+	concatenation := append(usernameHash, filenameHash...)
+	userHash := userlib.Hash(concatenation)
+	structUUID, err := uuid.FromBytes(userHash[:16])
+	if err != nil {
+		err = errors.New("uuid frombytes error for struct uuid - loadfile")
+		return nil, err
+	}
+
+	// Get and verify the struct
+	// For owners: this is the Owner struct
+	// For shared users: this is the Sentinel struct
+	structBytes, err := pubVerifyAndDecrypt(structUUID, userdata.PrivateKey, pubVerifyKey)
+	// structBytes, err := hybridVerifyAndDecrypt(structUUID, userdata.PassHash, pubVerifyKey)
+	if err != nil {
+		return nil, errors.New("file does not exist or verification failed - loadfile")
+	}
+
+	// PART 3: DETERMINE ACCESS TYPE
+	// Check if user is owner or recipient of shared file
+
+	// Unmarshal into SOI interface to check struct type
+	// var fileStruct SOI
+	// var ownerStruct Owner
+	// errOwner := json.Unmarshal(structBytes, &ownerStruct)
+	// if errOwner == nil {
+	// 	fileStruct = &ownerStruct
+	// } else {
+	// 	// If not Owner, try Sentinel
+	// 	var sentinelStruct Sentinel
+	// 	errSentinel := json.Unmarshal(structBytes, &sentinelStruct)
+	// 	if errSentinel != nil {
+	// 		return nil, errors.New("struct unmarshal failed - not owner or sentinel - loadfile")
+	// 	}
+	// 	fileStruct = &sentinelStruct
+	// }
+	type typeStruct struct {
+		Type string
+	}
+	var tempStruct typeStruct
+	err = json.Unmarshal(structBytes, &tempStruct)
+	if err != nil {
+		return nil, errors.New("struct type unmarshal failed - loadfile")
+	}
+
+	// Variables to store file access information
+	var filePtr userlib.UUID // Points to the File struct
+	var fileKey []byte       // Key to decrypt file content
+	var fileMacKey []byte    // Key to verify file integrity
+
+	// PART 4: GET FILE ACCESS INFORMATION
+	// Different process for owners vs shared users
+
+	if tempStruct.Type == "owner" {
+		// User is the owner - process Owner struct
+		var ownerStruct Owner
+		err = json.Unmarshal(structBytes, &ownerStruct)
+		if err != nil {
+			return nil, errors.New("owner struct unmarshal failed - loadfile")
+		}
+
+		userlib.DebugMsg("LoadFile - Owner type detected, struct: %v", ownerStruct)
+		userlib.DebugMsg("LoadFile - Owner FileEncDecKey and FileMACKey lengths: %d, %d",
+			len(ownerStruct.FileEncDecKey), len(ownerStruct.FileMACKey))
+		userlib.DebugMsg("LoadFile - Owner FileEncDecKey and FileMACKey : %d, %d",
+			ownerStruct.FileEncDecKey, ownerStruct.FileMACKey)
+
+		// Get file access info directly from Owner struct
+		filePtr = ownerStruct.FilePointer
+		fileKey = ownerStruct.FileEncDecKey
+		fileMacKey = ownerStruct.FileMACKey
+
+		userlib.DebugMsg("LoadFile keys - Key length: %d, MAC key length: %d", len(fileKey), len(fileMacKey))
+		userlib.DebugMsg("LoadFile attempting to verify/decrypt file at pointer: %v", filePtr)
+
+	} else if tempStruct.Type == "sentinel" {
+		// User is not owner - process Sentinel struct
+		var sentinelStruct Sentinel
+		err = json.Unmarshal(structBytes, &sentinelStruct)
+		if err != nil {
+			return nil, errors.New("sentinel struct unmarshal failed - loadfile")
+		}
+
+		userlib.DebugMsg("LoadFile - Sentinel struct key lengths - SharedStructKey: %d, SharedStructSignatureKey: %d",
+			len(sentinelStruct.SharedStructKey), len(sentinelStruct.SharedStructSignatureKey))
+
+		// Get and verify the shared struct
+		sharedBytes, err := symVerifyAndDecrypt(
+			sentinelStruct.SharedStructPointer,
+			sentinelStruct.SharedStructKey,
+			sentinelStruct.SharedStructSignatureKey)
+		if err != nil {
+			return nil, errors.New("shared struct verification failed - loadfile")
+		}
+
+		// Get file access info from shared struct
+		var sharedStruct Shared
+		err = json.Unmarshal(sharedBytes, &sharedStruct)
+		if err != nil {
+			return nil, errors.New("shared struct unmarshal failed - loadfile")
+		}
+
+		userlib.DebugMsg("LoadFile - Retrieved shared struct key lengths - Enc: %d, MAC: %d",
+			len(sharedStruct.FileEncDecKey), len(sharedStruct.FileMACKey))
+
+		filePtr = sharedStruct.FilePointer
+		fileKey = sharedStruct.FileEncDecKey
+		fileMacKey = sharedStruct.FileMACKey
+
+		userlib.DebugMsg("LoadFile keys - Key length: %d, MAC key length: %d", len(fileKey), len(fileMacKey))
+		userlib.DebugMsg("LoadFile attempting to verify/decrypt file at pointer: %v", filePtr)
+	} else {
+		return nil, errors.New("invalid struct type - loadfile")
+	}
+
+	// PART 5: GET FILE STRUCT
+	// Access and verify the File struct
+
+	// Get and verify File struct
+	fileStructBytes, err := symVerifyAndDecrypt(filePtr, fileKey, fileMacKey)
+	if err != nil {
+		return nil, errors.New("file struct verification failed - loadfile")
+	}
+
+	// Unmarshal File struct
+	var file File
+	err = json.Unmarshal(fileStructBytes, &file)
+	if err != nil {
+		return nil, errors.New("file struct unmarshal failed - loadfile")
+	}
+
+	userlib.DebugMsg("File struct: Start=%v, End=%v, NodeCount=%d", file.FileStart, file.FileEnd, file.NodeCount)
+
+	// PART 6: READ FILE CONTENT
+	// Process content nodes until sentinel
+
+	content = []byte{}            // Initialize empty content buffer
+	currentUUID := file.FileStart // Start at first node
+	const NodeSize = 128          // Each node is exactly 128 bytes
+
+	userlib.DebugMsg("Getting first node...")
+	userlib.DebugMsg("LoadFile - About to verify node with UUID: %v", currentUUID)
+	userlib.DebugMsg("LoadFile - Using keys with lengths: Enc: %d, MAC: %d",
+		len(fileKey), len(fileMacKey))
+	userlib.DebugMsg("LoadFile - Using keys : Enc: %d, MAC: %d",
+		fileKey, fileMacKey)
+
+	// Get first node
+	nodeBytes, err := symVerifyAndDecrypt(currentUUID, fileKey, fileMacKey)
+	if err != nil {
+		return nil, errors.New("node verification failed - loadfile")
+	}
+
+	var firstNode ContentNode
+	err = json.Unmarshal(nodeBytes, &firstNode)
+	if err != nil {
+		return nil, errors.New("node unmarshal failed - loadfile")
+	}
+
+	userlib.DebugMsg("Starting LoadFile for file: %s", filename)
+
+	userlib.DebugMsg("First node NextUUID: %v, FileEnd: %v", firstNode.NextUUID, file.FileEnd)
+	lastByte := firstNode.Content[NodeSize-1]
+	userlib.DebugMsg("Last byte: %d", lastByte)
+
+	// After getting and verifying first node:
+	userlib.DebugMsg("First node content length: %d", len(firstNode.Content))
+	userlib.DebugMsg("First node last byte value: %d", firstNode.Content[NodeSize-1])
+	userlib.DebugMsg("Is single node? %v", firstNode.NextUUID == file.FileEnd)
+
+	if file.NodeCount == 1 || firstNode.NextUUID == file.FileEnd {
+		// Verify the padding
+		if lastByte < NodeSize {
+			// Verify all padding bytes are consistent
+			contentLength := NodeSize - int(lastByte)
+			isPaddingValid := true
+			for i := contentLength; i < NodeSize; i++ {
+				if firstNode.Content[i] != lastByte {
+					isPaddingValid = false
+					break
+				}
+			}
+
+			if isPaddingValid {
+				userlib.DebugMsg("Single node with valid padding - returning %d bytes", contentLength)
+				return firstNode.Content[:contentLength], nil
+			}
+		}
+	}
+
+	// Follow linked list until we hit sentinel
+	for currentUUID != uuid.Nil {
+		// Get and verify node
+		nodeBytes, err := symVerifyAndDecrypt(currentUUID, fileKey, fileMacKey)
+		if err != nil {
+			return nil, errors.New("node verification failed - loadfile")
+		}
+
+		// Unmarshal into ContentNode
+		var node ContentNode
+		err = json.Unmarshal(nodeBytes, &node)
+		if err != nil {
+			return nil, errors.New("node unmarshal failed - loadfile")
+		}
+
+		// Check if this is sentinel node (all 128s)
+		isSentinel := true
+		for _, b := range node.Content {
+			if b != NodeSize {
+				isSentinel = false
+				break
+			}
+		}
+		if isSentinel {
+			break
+		}
+
+		// If last content node (contains padding)
+		if node.NextUUID == file.FileEnd {
+			// Remove padding if present
+			lastByte := node.Content[NodeSize-1]
+			if lastByte < NodeSize {
+				paddingLen := int(lastByte)
+				actualContentLen := NodeSize - paddingLen
+				content = append(content, node.Content[:actualContentLen]...)
+			} else {
+				content = append(content, node.Content...)
+			}
+			break
+		}
+
+		// Regular node - append content
+		content = append(content, node.Content...)
+
+		// Move to next node
+		currentUUID = node.NextUUID
+	}
+
+	return content, nil
+}
+
+/*
+If the target user already has access to the file,
+or if the target user has already had their access to the file revoked,
+then this function (User.CreateInvitation) has undefined behavior and will not be tested.
+*/
+func (userdata *User) CreateInvitation(filename string, recipientUsername string) (invitationPtr uuid.UUID, err error) {
+	// Check if recipientUsername doesn't exist
+	_, okBool := userlib.KeystoreGet(recipientUsername)
+	if !okBool {
+		err = errors.New("recipient username doesn't exist - createinvitation")
+		return uuid.New(), err
+	}
+
+	// Verify userdata struct (copied from GetUser)
+	usernameHash := userlib.Hash([]byte(userdata.Username))
+	usernameUUID, err := uuid.FromBytes(usernameHash[:16])
+	if err != nil {
+		err = errors.New("uuid.frombytes error - createinvitation")
+		return uuid.New(), err
+	}
+	pubVerifyKey, okBool := userlib.KeystoreGet(userdata.Username + "PublicVerifyKey")
+	if !okBool {
+		err = errors.New("can't keystoreget public signature key for userdata struct - createinvitation")
+		return uuid.New(), err
+	}
+	_, err = hybridVerifyAndDecrypt(usernameUUID, userdata.PassHash, pubVerifyKey)
+	if err != nil {
+		err = errors.New("hybrid-verify-and-decrypt error for verifying userdata struct - createinvitation")
+		return uuid.New(), err
+	}
+
+	// Check if user's Owner/Sentinel struct exists
+	filenameHash := userlib.Hash([]byte(filename))
+	concatenation := append(usernameHash, filenameHash...)
+	userHash := userlib.Hash(concatenation)
+	structUUID, err := uuid.FromBytes(userHash[:16])
+	if err != nil {
+		err = errors.New("uuid frombytes error for user's struct uuid - createinvitation")
+		return uuid.New(), err
+	}
+
+	// Get user's Owner/Sentinel struct
+	userStructMarshal, err := pubVerifyAndDecrypt(structUUID, userdata.PrivateKey, pubVerifyKey)
+	if err != nil {
+		err = errors.New("verify integrity on user's owner/sentinel struct failed - createinvitation")
+		return uuid.New(), err
+	}
+
+	// var userStruct SOI
+	// var ownerStruct Owner
+	// errOwner := json.Unmarshal(userStructMarshal, &ownerStruct)
+	// if errOwner == nil {
+	// 	userStruct = &ownerStruct
+	// } else {
+	// 	// If not Owner, try Sentinel
+	// 	var sentinelStruct Sentinel
+	// 	errSentinel := json.Unmarshal(userStructMarshal, &sentinelStruct)
+	// 	if errSentinel != nil {
+	// 		return uuid.New(), errors.New("struct unmarshal failed - not owner or sentinel - createinvitation")
+	// 	}
+	// 	userStruct = &sentinelStruct
+	// }
+
+	// First unmarshal to get the type
+	type typeStruct struct {
+		Type string
+	}
+	var tempStruct typeStruct
+	err = json.Unmarshal(userStructMarshal, &tempStruct)
+	if err != nil {
+		return uuid.New(), errors.New("struct type unmarshal failed - createinvitation")
+	}
+
+	// Create invitation struct
+	var invitationStruct Invitation
+	invitationStruct.Sender = userdata.Username
+	invitationStruct.Recipient = recipientUsername
+	// SharedStructPointer & SharedStructKey is later
+
+	// Check whether the user's struct is an Owner or Sentinel struct
+	if tempStruct.Type == "owner" {
+		var ownerStruct Owner
+		err = json.Unmarshal(userStructMarshal, &ownerStruct)
+		if err != nil {
+			return uuid.New(), errors.New("owner struct unmarshal failed - createinvitation")
+		}
+
+		// Check file existence & verify it
+		_, err = symVerifyAndDecrypt(ownerStruct.FilePointer, ownerStruct.FileEncDecKey, ownerStruct.FileMACKey)
+		if err != nil {
+			err = errors.New("failed to verify existence or signature or file through sym-verify-and-decrypt (owner) - createinvitation")
+			return uuid.New(), err
+		}
+
+		userlib.DebugMsg("CreateInvitation - Original key lengths from owner - Enc: %d, MAC: %d",
+			len(ownerStruct.FileEncDecKey), len(ownerStruct.FileMACKey))
+
+		// Create shared struct & add file key
+		var sharedStruct Shared
+		sharedStruct.FileEncDecKey = ownerStruct.FileEncDecKey[:16]
+		sharedStruct.FileMACKey = ownerStruct.FileMACKey[:16]
+		sharedStruct.FilePointer = ownerStruct.FilePointer
+
+		userlib.DebugMsg("CreateInvitation - Shared struct key lengths - Enc: %d, MAC: %d",
+			len(sharedStruct.FileEncDecKey), len(sharedStruct.FileMACKey))
+
+		// Marshal encrypt and sign sharedStruct
+		sharedStructMarshal, err := json.Marshal(sharedStruct)
+		if err != nil {
+			err = errors.New("shared struct marshal failed - createinvitation")
+			return uuid.New(), err
+		}
+		// Obtain shared struct keys
+		originalSharedStructKey := userlib.RandomBytes(16)
+		encryptSharedStructKey64, err := userlib.HashKDF(originalSharedStructKey, []byte("shared struct encryption key"))
+		if err != nil {
+			err = errors.New("hashkdf shared struct encryption key creation failed - createinvitation")
+			return uuid.New(), err
+		}
+		encryptSharedStructKey := encryptSharedStructKey64[:16]
+
+		macSharedStructKey64, err := userlib.HashKDF(originalSharedStructKey, []byte("sharedFile MAC key"))
+		if err != nil {
+			err = errors.New("hashkdf shared file mac key creation failed - createinvitation")
+			return uuid.New(), err
+		}
+		macSharedStructKey := macSharedStructKey64[:16]
+
+		// Encrypt and sign
+		pairSharedStructMarshal, err := symEncryptAndSign(sharedStructMarshal, encryptSharedStructKey, macSharedStructKey)
+		if err != nil {
+			err = errors.New("sym-encrypt-and-sign(pair shared struct marshal) failed - createinvitation")
+			return uuid.New(), err
+		}
+		// Add shared struct to datastore
+		sharedStructPointer := uuid.New()
+		userlib.DatastoreSet(sharedStructPointer, pairSharedStructMarshal)
+
+		// Now for Owner Struct changes!
+		// Add recipient to SharedWith
+		var sharedWithStruct SharedUsers
+		sharedWithStruct.ShareUUID = make(map[string]userlib.UUID)
+		sharedWithStructMarshal, err := pubVerifyAndDecrypt(ownerStruct.SharedWith, userdata.PrivateKey, pubVerifyKey)
+		if err != nil {
+			err = errors.New("verify integrity shared-with-struct error - createinvitation")
+			return uuid.New(), err
+		}
+		err = json.Unmarshal(sharedWithStructMarshal, &sharedWithStruct)
+		if err != nil {
+			err = errors.New("shared-with-struct unmarshal failed - createinvitation")
+			return uuid.New(), err
+		}
+		// TODO: Make sure I can edit a map like this!
+		sharedWithStruct.ShareUUID[recipientUsername] = sharedStructPointer
+
+		// Put SharedWith back into datastore
+		pubEncryptionKey, okBool := userlib.KeystoreGet(userdata.Username)
+		if !okBool {
+			err = errors.New("userdata.Username does not exist in Keystore - createinvitation")
+			return uuid.New(), err
+		}
+		sharedWithStructMarshal, err = json.Marshal(sharedWithStruct)
+		if err != nil {
+			err = errors.New("shared-with struct marshal failed - createinvitation")
+			return uuid.New(), err
+		}
+		pairSharedWithMarshal, err := pubEncryptAndSign(sharedWithStructMarshal, pubEncryptionKey, userdata.PrivateSignKey)
+		if err != nil {
+			err = errors.New("pub-encrypt-and-sign error on shared-with struct - createinvitation")
+			return uuid.New(), err
+		}
+		userlib.DatastoreSet(ownerStruct.SharedWith, pairSharedWithMarshal)
+
+		// Add symmetric encryption key to SSEncryptionKeys
+		var SSEStruct SSEncryptionKeys
+		SSEStruct.ShareKey = make(map[string][]byte)
+		SSEStructMarshal, err := pubVerifyAndDecrypt(ownerStruct.SSEncryptionKeys, userdata.PrivateKey, pubVerifyKey)
+		if err != nil {
+			err = errors.New("verify integrity SS-encryption-struct error - createinvitation")
+			return uuid.New(), err
+		}
+		err = json.Unmarshal(SSEStructMarshal, &SSEStruct)
+		if err != nil {
+			err = errors.New("SS-encryption-struct unmarshal failed - createinvitation")
+			return uuid.New(), err
+		}
+		SSEStruct.ShareKey[recipientUsername] = encryptSharedStructKey
+
+		// Put SSEncryptionKeys back into datastore
+		SSEStructMarshal, err = json.Marshal(SSEStruct)
+		if err != nil {
+			err = errors.New("shared-with struct marshal failed - createinvitation")
+			return uuid.New(), err
+		}
+		pairSSEStructMarshal, err := pubEncryptAndSign(SSEStructMarshal, pubEncryptionKey, userdata.PrivateSignKey)
+		if err != nil {
+			err = errors.New("pub-encrypt-and-sign error on shared-with struct - createinvitation")
+			return uuid.New(), err
+		}
+		userlib.DatastoreSet(ownerStruct.SSEncryptionKeys, pairSSEStructMarshal)
+
+		// Add symmetric signature key to SSSignatureKeys
+		var SSSStruct SSSignatureKeys
+		SSSStruct.ShareKey = make(map[string][]byte)
+		SSSStructMarshal, err := pubVerifyAndDecrypt(ownerStruct.SSSignatureKeys, userdata.PrivateKey, pubVerifyKey)
+		if err != nil {
+			err = errors.New("verify integrity SS-signature-struct error - createinvitation")
+			return uuid.New(), err
+		}
+		err = json.Unmarshal(SSSStructMarshal, &SSSStruct)
+		if err != nil {
+			err = errors.New("SS-signature-struct unmarshal failed - createinvitation")
+			return uuid.New(), err
+		}
+		SSEStruct.ShareKey[recipientUsername] = macSharedStructKey
+
+		// Put SSSignatureKeys back into datastore
+		SSSStructMarshal, err = json.Marshal(SSSStruct)
+		if err != nil {
+			err = errors.New("shared-with struct marshal failed - createinvitation")
+			return uuid.New(), err
+		}
+		pairSSSStructMarshal, err := pubEncryptAndSign(SSSStructMarshal, pubEncryptionKey, userdata.PrivateSignKey)
+		if err != nil {
+			err = errors.New("pub-encrypt-and-sign error on shared-with struct - createinvitation")
+			return uuid.New(), err
+		}
+		userlib.DatastoreSet(ownerStruct.SSSignatureKeys, pairSSSStructMarshal)
+
+		// Add pointer and keys to Invitation struct
+		invitationStruct.SharedStructPointer = sharedStructPointer
+		invitationStruct.SharedStructKey = encryptSharedStructKey
+		invitationStruct.SharedStructSignatureKey = macSharedStructKey
+	}
+	// TODO: fix this to be elif statement if possible
+	if tempStruct.Type == "sentinel" {
+		// Point invitation to user's shared struct
+		var sentinelStruct Sentinel
+		err = json.Unmarshal(userStructMarshal, &sentinelStruct)
+		if err != nil {
+			err = errors.New("sentinel struct unmarshal failed - createinvitation")
+			return uuid.New(), err
+		}
+
+		// Checking if the file exists and if the signature is valid
+		// Getting sharedStruct
+		sharedStructMarshal, err := symVerifyAndDecrypt(sentinelStruct.SharedStructPointer, sentinelStruct.SharedStructKey, sentinelStruct.SharedStructSignatureKey)
+		if err != nil {
+			err = errors.New("shared struct verification failed - createinvitation")
+			return uuid.New(), err
+		}
+		var sharedStruct Shared
+		err = json.Unmarshal(sharedStructMarshal, &sharedStruct)
+		if err != nil {
+			err = errors.New("shared-struct unmarshal failed - createinvitation")
+			return uuid.New(), err
+		}
+		// Check file existence & verify it
+		_, err = symVerifyAndDecrypt(sharedStruct.FilePointer, sharedStruct.FileEncDecKey, sharedStruct.FileMACKey)
+		if err != nil {
+			err = errors.New("sentinel part - failed to verify existence or signature or file through sym-verify-and-decrypt (shared) - createinvitation")
+			return uuid.New(), err
+		}
+
+		invitationStruct.SharedStructPointer = sentinelStruct.SharedStructPointer
+		invitationStruct.SharedStructKey = sentinelStruct.SharedStructKey
+		invitationStruct.SharedStructSignatureKey = sentinelStruct.SharedStructSignatureKey
+	}
+
+	// Encrypt and sign Invitation
+	invitationEncryptionKey, okBool := userlib.KeystoreGet(recipientUsername)
+	if !okBool {
+		err = errors.New("can't keystoreget public signature key for recipient username - createinvitation")
+		return uuid.New(), err
+	}
+	invitationMarshal, err := json.Marshal(invitationStruct)
+	if err != nil {
+		err = errors.New("invitation struct marshal failed - createinvitation")
+		return uuid.New(), err
+	}
+	pairInvitationMarshal, err := pubEncryptAndSign(invitationMarshal, invitationEncryptionKey, userdata.PrivateSignKey)
+	if err != nil {
+		err = errors.New("pub-encrypt-and-sign for invitation struct failed - createinvitation")
+		return uuid.New(), err
+	}
+
+	// Upload invitation to datastore
+	invitationPtr = uuid.New()
+	userlib.DatastoreSet(invitationPtr, pairInvitationMarshal)
+
+	return invitationPtr, err
+}
+
+func (userdata *User) AcceptInvitation(senderUsername string, invitationPtr uuid.UUID, filename string) error {
+	// Check if invitation exists (not just sentinel)
+	// Fails when revoked (when writing pointer to shared struct, check if it exists, if not error?)
+	// Check if senderUsername doesn't exist
+	senderPubVerifyKey, okBool := userlib.KeystoreGet(senderUsername + "PublicVerifyKey")
+	if !okBool {
+		err := errors.New("recipient username doesn't exist - acceptinvitation")
+		return err
+	}
+
+	// Verify userdata struct (copied from GetUser)
+	usernameHash := userlib.Hash([]byte(userdata.Username))
+	usernameUUID, err := uuid.FromBytes(usernameHash[:16])
+	if err != nil {
+		err = errors.New("uuid.frombytes error - acceptinvitation")
+		return err
+	}
+	userPubVerifyKey, okBool := userlib.KeystoreGet(userdata.Username + "PublicVerifyKey")
+	if !okBool {
+		err = errors.New("can't keystoreget public signature key for userdata struct - acceptinvitation")
+		return err
+	}
+	_, err = hybridVerifyAndDecrypt(usernameUUID, userdata.PassHash, userPubVerifyKey)
+	if err != nil {
+		err = errors.New("hybrid-verify-and-decrypt error for verifying userdata struct - acceptinvitation")
+		return err
+	}
+
+	// Verify invitation existence and its signature
+	invitationMarshal, err := pubVerifyAndDecrypt(invitationPtr, userdata.PrivateKey, senderPubVerifyKey)
+	if err != nil {
+		err = errors.New("pub-verify-and-decrypt error for verifying invitation struct - acceptinvitation")
+		return err
+	}
+	var invitationStruct Invitation
+	err = json.Unmarshal(invitationMarshal, &invitationStruct)
+	if err != nil {
+		err = errors.New("unmarshal invitation error - acceptinvitation")
+		return err
+	}
+
+	// Verify shared struct existence
+	// Getting sharedStruct
+	sharedStructMarshal, err := symVerifyAndDecrypt(invitationStruct.SharedStructPointer, invitationStruct.SharedStructKey, invitationStruct.SharedStructSignatureKey)
+	if err != nil {
+		err = errors.New("shared struct verification failed - acceptinvitation")
+		return err
+	}
+	var sharedStruct Shared
+	err = json.Unmarshal(sharedStructMarshal, &sharedStruct)
+	if err != nil {
+		err = errors.New("shared-struct unmarshal failed - acceptinvitation")
+		return err
+	}
+
+	userlib.DebugMsg("AcceptInvitation - Shared struct key lengths - Enc: %d, MAC: %d",
+		len(sharedStruct.FileEncDecKey), len(sharedStruct.FileMACKey))
+
+	// Check file existence & verify it
+	_, err = symVerifyAndDecrypt(sharedStruct.FilePointer, sharedStruct.FileEncDecKey, sharedStruct.FileMACKey)
+	if err != nil {
+		err = errors.New("failed to verify existence or signature of file through sym-verify-and-decrypt - acceptinvitation")
+		return err
+	}
+
+	// Create and upload sentinel struct
+	var sentinelStruct Sentinel
+	sentinelStruct.Type = "sentinel"
+	sentinelStruct.SharedStructKey = invitationStruct.SharedStructKey
+	sentinelStruct.SharedStructSignatureKey = invitationStruct.SharedStructSignatureKey
+	sentinelStruct.SharedStructPointer = invitationStruct.SharedStructPointer
+
+	userPubEncKey, okBool := userlib.KeystoreGet(userdata.Username)
+	if !okBool {
+		err := errors.New("user username doesn't exist - acceptinvitation")
+		return err
+	}
+	sentinelMarshal, err := json.Marshal(sentinelStruct)
+	if err != nil {
+		err = errors.New("marshal(sentinel struct) error - acceptinvitation")
+		return err
+	}
+
+	// Get uuid of where the Sentinel struct will be
+	filenameHash := userlib.Hash([]byte(filename))
+	concatenation := append(usernameHash, filenameHash...)
+	userHash := userlib.Hash(concatenation)
+	sentinelUUID, err := uuid.FromBytes(userHash[:16])
+	if err != nil {
+		err = errors.New("uuid frombytes error for user's struct uuid - acceptinvitation")
+		return err
+	}
+
+	// Check a sentinel isn't already there
+	_, okBool = userlib.DatastoreGet(sentinelUUID)
+	if okBool {
+		err = errors.New("file from same user and of the same name already exists - accept-invitation")
+		return err
+	}
+
+	// Upload sentinel to DataStore
+	pairMarshal, err := pubEncryptAndSign(sentinelMarshal, userPubEncKey, userdata.PrivateSignKey)
+	if err != nil {
+		err = errors.New("pub-encrypt-and-sign on sentinel error - acceptinvitation")
+		return err
+	}
+
+	userlib.DatastoreSet(sentinelUUID, pairMarshal)
+	return nil
+}
+
+func (userdata *User) RevokeAccess(filename string, recipientUsername string) error {
+	// PART 1: VERIFY OWNER ACCESS
+	// Get owner struct at deterministic location
+	usernameHash := userlib.Hash([]byte(userdata.Username))
+	filenameHash := userlib.Hash([]byte(filename))
+	concatenation := append(usernameHash, filenameHash...)
+	userHash := userlib.Hash(concatenation)
+	ownerUUID, err := uuid.FromBytes(userHash[:16])
+	if err != nil {
+		return errors.New("owner uuid generation failed - revokeaccess")
+	}
+
+	// Get owner's public verification key
+	pubVerifyKey, ok := userlib.KeystoreGet(userdata.Username + "PublicVerifyKey")
+	if !ok {
+		return errors.New("can't get public verification key - revokeaccess")
+	}
+
+	// Get and verify owner struct
+	ownerBytes, err := pubVerifyAndDecrypt(ownerUUID, userdata.PrivateKey, pubVerifyKey)
+	if err != nil {
+		return errors.New("owner struct verification failed - revokeaccess")
+	}
+
+	var ownerStruct Owner
+	err = json.Unmarshal(ownerBytes, &ownerStruct)
+	if err != nil {
+		return errors.New("owner struct unmarshal failed - revokeaccess")
+	}
+
+	// PART 2: GET AND VERIFY SHARING DICTIONARIES
+	// Get SharedWith dictionary
+	sharedWithBytes, err := pubVerifyAndDecrypt(ownerStruct.SharedWith, userdata.PrivateKey, pubVerifyKey)
+	if err != nil {
+		return errors.New("sharedwith dict verification failed - revokeaccess")
+	}
+	var sharedWithDict SharedUsers
+	err = json.Unmarshal(sharedWithBytes, &sharedWithDict)
+	if err != nil {
+		return errors.New("sharedwith dict unmarshal failed - revokeaccess")
+	}
+
+	// Get encryption keys dictionary
+	encKeysBytes, err := pubVerifyAndDecrypt(ownerStruct.SSEncryptionKeys, userdata.PrivateKey, pubVerifyKey)
+	if err != nil {
+		return errors.New("encryption keys dict verification failed - revokeaccess")
+	}
+	var encKeysDict SSEncryptionKeys
+	err = json.Unmarshal(encKeysBytes, &encKeysDict)
+	if err != nil {
+		return errors.New("encryption keys dict unmarshal failed - revokeaccess")
+	}
+
+	// Get signature keys dictionary
+	sigKeysBytes, err := pubVerifyAndDecrypt(ownerStruct.SSSignatureKeys, userdata.PrivateKey, pubVerifyKey)
+	if err != nil {
+		return errors.New("signature keys dict verification failed - revokeaccess")
+	}
+	var sigKeysDict SSSignatureKeys
+	err = json.Unmarshal(sigKeysBytes, &sigKeysDict)
+	if err != nil {
+		return errors.New("signature keys dict unmarshal failed - revokeaccess")
+	}
+
+	// PART 3: VERIFY TARGET EXISTS AND DELETE THE SHARED STRUCT
+	// Check if recipient is in shared users dictionary
+	_, exists := sharedWithDict.ShareUUID[recipientUsername]
+	if !exists {
+		return errors.New("recipient not shared with - revokeaccess")
+	}
+
+	// Delete shared struct of revokee
+	userlib.DatastoreDelete(sharedWithDict.ShareUUID[recipientUsername])
+	delete(sharedWithDict.ShareUUID, recipientUsername)
+	delete(sigKeysDict.ShareKey, recipientUsername)
+	delete(encKeysDict.ShareKey, recipientUsername)
+
+	// PART 4: GET FILE STRUCT AND RE-ENCRYPT ALL CONTENT
+	fileStructBytes, err := symVerifyAndDecrypt(ownerStruct.FilePointer, ownerStruct.FileEncDecKey, ownerStruct.FileMACKey)
+	if err != nil {
+		return errors.New("file verification failed - revokeaccess")
+	}
+
+	var file File
+	err = json.Unmarshal(fileStructBytes, &file)
+	if err != nil {
+		return errors.New("file struct unmarshal failed - revokeaccess")
+	}
+
+	// Generate new keys and UUID for re-encryption
+	randBytes := userlib.RandomBytes(16)
+	fileEncKey64, err := userlib.HashKDF(randBytes, []byte("FileEncryption"))
+	if err != nil {
+		return errors.New("file-sym-key creation failed - storefile")
+	}
+	newFileKey := fileEncKey64[:16]
+	fileMACKey64, err := userlib.HashKDF(randBytes, []byte("FileSignature"))
+	if err != nil {
+		return errors.New("file-signature-key creation failed - storefile")
+	}
+	newFileMacKey := fileMACKey64[:16]
+	newFileStart := uuid.New()
+	var newFileEnd uuid.UUID
+
+	// Follow the linked list and re-encrypt each node
+	currentUUID := file.FileStart
+	var newCurrentUUID uuid.UUID = newFileStart
+	var newNextUUID uuid.UUID
+
+	const NodeSize = 128
+	continuer := true
+
+	for continuer {
+		// Get and verify current node
+		nodeBytes, err := symVerifyAndDecrypt(currentUUID, ownerStruct.FileEncDecKey, ownerStruct.FileMACKey)
+		if err != nil {
+			return errors.New("node verification failed - revokeaccess")
+		}
+
+		var node ContentNode
+		err = json.Unmarshal(nodeBytes, &node)
+		if err != nil {
+			return errors.New("node unmarshal failed - revokeaccess")
+		}
+
+		// Check if this is last content node or sentinel
+		isSentinel := true
+		for _, b := range node.Content {
+			if b != NodeSize {
+				isSentinel = false
+				break
+			}
+			continuer = false
+		}
+
+		ender := false
+		if isSentinel {
+			// Create new sentinel node with null UUID
+			node.NextUUID = uuid.Nil
+		} else if node.NextUUID == file.FileEnd {
+			// Last content node - point to new sentinel
+			newNextUUID = uuid.New()
+			node.NextUUID = newNextUUID
+			newFileEnd = newCurrentUUID
+		} else if currentUUID == file.FileEnd {
+			ender = true
+		} else {
+			// Regular node - point to next new UUID
+			newNextUUID = uuid.New()
+			node.NextUUID = newNextUUID
+		}
+
+		// Re-encrypt and store node at new location
+		nodeBytes, err = json.Marshal(node)
+		if err != nil {
+			return errors.New("node marshal failed - revokeaccess")
+		}
+
+		nodeCipher := userlib.SymEnc(newFileKey, userlib.RandomBytes(userlib.AESBlockSizeBytes), nodeBytes)
+		nodeMAC, err := userlib.HMACEval(newFileMacKey, nodeCipher)
+		if err != nil {
+			return errors.New("node mac failed - revokeaccess")
+		}
+
+		nodePair := Pair{
+			Cyphertext: nodeCipher,
+			Signature:  nodeMAC,
+		}
+
+		nodePairBytes, err := json.Marshal(nodePair)
+		if err != nil {
+			return errors.New("node pair marshal failed - revokeaccess")
+		}
+
+		userlib.DatastoreSet(newCurrentUUID, nodePairBytes)
+
+		// Move to next node
+		if node.NextUUID == uuid.Nil {
+			break
+		} else if !ender {
+			break
+		}
+		currentUUID = node.NextUUID
+		newCurrentUUID = newNextUUID
+	}
+
+	// Update File struct with new pointers and store it
+	file.FileStart = newFileStart
+	file.FileEnd = newFileEnd
+
+	fileBytes, err := json.Marshal(file)
+	if err != nil {
+		return errors.New("file struct marshal failed - revokeaccess")
+	}
+
+	fileCipher := userlib.SymEnc(newFileKey, userlib.RandomBytes(userlib.AESBlockSizeBytes), fileBytes)
+	fileMAC, err := userlib.HMACEval(newFileMacKey, fileCipher)
+	if err != nil {
+		return errors.New("file mac failed - revokeaccess")
+	}
+
+	filePair := Pair{
+		Cyphertext: fileCipher,
+		Signature:  fileMAC,
+	}
+
+	filePairBytes, err := json.Marshal(filePair)
+	if err != nil {
+		return errors.New("file pair marshal failed - revokeaccess")
+	}
+
+	newFileUUID := uuid.New()
+	userlib.DatastoreSet(newFileUUID, filePairBytes)
+
+	// PART 5: UPDATE REMAINING VALID USERS' SHARED STRUCTS
+	// Create new maps for updated dictionaries
+	newSharedWith := make(map[string]userlib.UUID)
+	newEncKeys := make(map[string][]byte)
+	newSigKeys := make(map[string][]byte)
+
+	// Update remaining valid users' Shared Structs
+	for username, sharedUUID := range sharedWithDict.ShareUUID {
+		// Skip the revoked user
+		if username == recipientUsername {
+			continue
+		}
+
+		// Get current user's keys
+		encKey := encKeysDict.ShareKey[username]
+		sigKey := sigKeysDict.ShareKey[username]
+
+		// Get and verify their shared struct
+		sharedBytes, err := symVerifyAndDecrypt(sharedUUID, encKey, sigKey)
+		if err != nil {
+			return errors.New("shared struct verification failed - revokeaccess")
+		}
+
+		var sharedStruct Shared
+		err = json.Unmarshal(sharedBytes, &sharedStruct)
+		if err != nil {
+			return errors.New("shared struct unmarshal failed - revokeaccess")
+		}
+
+		// Update shared struct with new file info
+		sharedStruct.FilePointer = newFileUUID
+		sharedStruct.FileEncDecKey = newFileKey
+		sharedStruct.FileMACKey = newFileMacKey
+
+		// Re-encrypt and store updated shared struct
+		sharedStructBytes, err := json.Marshal(sharedStruct)
+		if err != nil {
+			return errors.New("shared struct marshal failed - revokeaccess")
+		}
+
+		sharedCipher := userlib.SymEnc(encKey, userlib.RandomBytes(userlib.AESBlockSizeBytes), sharedStructBytes)
+		sharedMAC, err := userlib.HMACEval(sigKey, sharedCipher)
+		if err != nil {
+			return errors.New("shared struct mac failed - revokeaccess")
+		}
+
+		sharedPair := Pair{
+			Cyphertext: sharedCipher,
+			Signature:  sharedMAC,
+		}
+
+		sharedPairBytes, err := json.Marshal(sharedPair)
+		if err != nil {
+			return errors.New("shared pair marshal failed - revokeaccess")
+		}
+
+		userlib.DatastoreSet(sharedUUID, sharedPairBytes)
+
+		// Add to new dictionaries
+		newSharedWith[username] = sharedUUID
+		newEncKeys[username] = encKey
+		newSigKeys[username] = sigKey
+	}
+
+	// PART 6: UPDATE OWNER STRUCT AND DICTIONARIES
+	// Update owner struct with new file info
+	ownerStruct.FilePointer = newFileUUID
+	ownerStruct.FileEncDecKey = newFileKey
+	ownerStruct.FileMACKey = newFileMacKey
+
+	// Update dictionaries
+	sharedWithDict.ShareUUID = newSharedWith
+	encKeysDict.ShareKey = newEncKeys
+	sigKeysDict.ShareKey = newSigKeys
+
+	// Store updated dictionaries
+	pubKey, ok := userlib.KeystoreGet(userdata.Username)
+	if !ok {
+		return errors.New("failed to get public key - revokeaccess")
+	}
+
+	for _, item := range []struct {
+		data interface{}
+		uuid userlib.UUID
+	}{
+		{sharedWithDict, ownerStruct.SharedWith},
+		{encKeysDict, ownerStruct.SSEncryptionKeys},
+		{sigKeysDict, ownerStruct.SSSignatureKeys},
+	} {
+		dictBytes, err := json.Marshal(item.data)
+		if err != nil {
+			return errors.New("dictionary marshal failed - revokeaccess")
+		}
+
+		encDictBytes, err := pubEncryptAndSign(dictBytes, pubKey, userdata.PrivateSignKey)
+		if err != nil {
+			return errors.New("dictionary encryption failed - revokeaccess")
+		}
+
+		userlib.DatastoreSet(item.uuid, encDictBytes)
+	}
+
+	// Store updated owner struct
+	ownerBytes, err = json.Marshal(ownerStruct)
+	if err != nil {
+		return errors.New("owner struct marshal failed - revokeaccess")
+	}
+
+	encOwnerBytes, err := pubEncryptAndSign(ownerBytes, pubKey, userdata.PrivateSignKey)
+	if err != nil {
+		return errors.New("owner struct encryption failed - revokeaccess")
+	}
+
+	userlib.DatastoreSet(ownerUUID, encOwnerBytes)
+
+	return nil
+}
+
+// Takes a UUID, finds it in DataStore, verifies its integrity, then decrypts it and returns the Marshal'd struct
+func pubVerifyAndDecrypt(uuid userlib.UUID, privateDecryptionKey userlib.PKEDecKey, publicVerifyKey userlib.DSVerifyKey) (marshalText []byte, err error) {
+	pairMarshal, okBool := userlib.DatastoreGet(uuid)
+	if !okBool {
+		err = errors.New("uuid not in datastore - pub-verify-and-decrypt")
+		return nil, err
+	}
+	var pair Pair
+	err = json.Unmarshal(pairMarshal, &pair)
+	if err != nil {
+		err = errors.New("unmarshal pair error - pub-verify-and-decrypt")
+		return nil, err
+	}
+
+	// Verify integrity/signature of struct
+	err = userlib.DSVerify(publicVerifyKey, pair.Cyphertext, pair.Signature)
+	if err != nil {
+		err = errors.New("signature failed on desired struct - pub-verify-and-decrypt")
+		return nil, err
+	}
+
+	// Decrypt cyphertext
+	// desiredMarshal, err := userlib.PKEDec(privateDecryptionKey, pair.Cyphertext)
+	// if err != nil {
+	// 	err = errors.New("cannot decrypt cypher text - pub-verify-and-decrypt")
+	// 	return nil, err
+	// }
+
+	// Split ciphertext into encrypted sym key and encrypted data
+	// The RSA ciphertext size is fixed based on key size, so we can split reliably
+	rsaSize := 256 // Size of RSA ciphertext with 2048-bit key
+	encryptedSymKey := pair.Cyphertext[:rsaSize]
+	dataCiphertext := pair.Cyphertext[rsaSize:]
+
+	// Decrypt symmetric key
+	symKey, err := userlib.PKEDec(privateDecryptionKey, encryptedSymKey)
+	if err != nil {
+		return nil, err
+	}
+
+	// Decrypt data with symmetric key
+	marshalText = userlib.SymDec(symKey, dataCiphertext)
+	return marshalText, nil
+}
+
+// Takes a UUID, finds it in DataStore, verifies its integrity, then decrypts it and returns the Marshal'd struct
+func hybridVerifyAndDecrypt(uuid userlib.UUID, symDecryptionKey []byte, publicVerifyKey userlib.DSVerifyKey) (marshalText []byte, err error) {
+	pairMarshal, okBool := userlib.DatastoreGet(uuid)
+	if !okBool {
+		err = errors.New("user not in datastore - hybrid-verify-and-decrypt")
+		return nil, err
+	}
+	// Get the Pair struct
+	var pair Pair
+	err = json.Unmarshal(pairMarshal, &pair)
+	if err != nil {
+		err = errors.New("unmarshal(pair) error - hybrid-verify-and-decrypt")
+		return nil, err
+	}
+	// Verify signature
+	err = userlib.DSVerify(publicVerifyKey, pair.Cyphertext, pair.Signature)
+	if err != nil {
+		err = errors.New("dsverify error - hybrid-verify-and-decrypt")
+		return nil, err
+	}
+	// Decrypt cyphertext
+	desiredMarshal := userlib.SymDec(symDecryptionKey, pair.Cyphertext)
+	return desiredMarshal, nil
+}
+
+// Takes a UUID, finds it in DataStore, verifies its integrity, then decrypts it and returns the Marshal'd struct
+func symVerifyAndDecrypt(uuid userlib.UUID, symDecryptionKey []byte, symMacKey []byte) (marshalText []byte, err error) {
+	userlib.DebugMsg("symVerifyAndDecrypt called with key lengths - Dec: %d, MAC: %d", len(symDecryptionKey), len(symMacKey))
+
+	pairMarshal, okBool := userlib.DatastoreGet(uuid)
+	if !okBool {
+		err = errors.New("user not in datastore - sym-verify-and-decrypt")
+		return nil, err
+	}
+	// Get the Pair struct
+	var pair Pair
+	err = json.Unmarshal(pairMarshal, &pair)
+	if err != nil {
+		err = errors.New("unmarshal(pair) error - sym-verify-and-decrypt")
+		return nil, err
+	}
+	// Verify signature
+	signature, err := userlib.HMACEval(symMacKey, pair.Cyphertext)
+	if err != nil {
+		err = errors.New("hmac sign error - sym-encrypt-and-sign")
+		return nil, err
+	}
+	okBool = userlib.HMACEqual(signature, pair.Signature)
+	if !okBool {
+		err = errors.New("HMAC in signatures not equal - sym-verify-and-decrypt")
+		return nil, err
+	}
+	// Decrypt cyphertext
+	desiredMarshal := userlib.SymDec(symDecryptionKey, pair.Cyphertext)
+
+	return desiredMarshal, nil
+}
+
+// Takes a marshal'd struct, encrypts it, signs it, puts it into a pair struct and returns the pair's marshal
+func pubEncryptAndSign(marshaledStruct []byte, publicEncryptionKey userlib.PKEEncKey, privateSignKey userlib.DSSignKey) (marshalText []byte, err error) {
+	// Generate random symmetric key
+	symKey := userlib.RandomBytes(16)
+
+	// Encrypt symmetric key with RSA
+	encryptedSymKey, err := userlib.PKEEnc(publicEncryptionKey, symKey)
+	if err != nil {
+		return nil, err
+	}
+
+	// Encrypt data with symmetric key
+	iv := userlib.RandomBytes(16)
+	dataCiphertext := userlib.SymEnc(symKey, iv, marshaledStruct)
+
+	// cyphertext, err := userlib.PKEEnc(publicEncryptionKey, marshaledStruct)
+	// if err != nil {
+	// 	// err = errors.New("pke encryption failed on struct - pub-encrypt-and-sign")
+	// 	return nil, err
+	// }
+	// Sign the combination of encrypted sym key and encrypted data
+	signature, err := userlib.DSSign(privateSignKey, append(encryptedSymKey, dataCiphertext...))
+	if err != nil {
+		return nil, errors.New("DS signature failed on struct - pub-encrypt-and-sign")
+	}
+
+	// Turn into a signature-cyphertext Pair struct
+	var pair Pair
+	pair.Signature = signature
+	pair.Cyphertext = append(encryptedSymKey, dataCiphertext...)
+
+	// Marshal Pair Struct
+	pairMarshal, err := json.Marshal(pair)
+	if err != nil {
+		err = errors.New("marshal(pair) error - pub-encrypt-and-sign")
+		return nil, err
+	}
+	return pairMarshal, nil
+}
+
+// Takes a marshal'd struct, encrypts it, signs it, puts it into a pair struct and returns the pair's marshal
+func symEncryptAndSign(marshaledStruct []byte, symEncryptionKey []byte, symSignatureKey []byte) (marshalText []byte, err error) {
+	// Encrypting
+	ivNonce := userlib.RandomBytes(userlib.AESBlockSizeBytes)
+	cyphertext := userlib.SymEnc(symEncryptionKey, ivNonce, marshaledStruct)
+	// Signing
+	signature, err := userlib.HMACEval(symSignatureKey, cyphertext)
+	if err != nil {
+		err = errors.New("hmac sign error - sym-encrypt-and-sign")
+		return nil, err
+	}
+	// Turn into a signature-cyphertext Pair struct
+	var pair Pair
+	pair.Signature = signature
+	pair.Cyphertext = cyphertext
+	// Marshal Pair Struct
+	pairMarshal, err := json.Marshal(pair)
+	if err != nil {
+		err = errors.New("marshal(pair) error - sym-encrypt-and-sign")
+		return nil, err
+	}
+	return pairMarshal, nil
+}
+
+// Takes a marshal'd struct, encrypts it, signs it, puts it into a pair struct and returns the pair's marshal
+func hybridEncryptAndSign(marshaledStruct []byte, symEncryptionKey []byte, privateSignKey userlib.DSSignKey) (marshalText []byte, err error) {
+	// Encrypting
+	ivNonce := userlib.RandomBytes(userlib.AESBlockSizeBytes)
+	cyphertext := userlib.SymEnc(symEncryptionKey, ivNonce, marshaledStruct)
+	// signature
+	signature, err := userlib.DSSign(privateSignKey, cyphertext)
+	if err != nil {
+		err = errors.New("ds sign error - hybrid-encrypt-and-sign")
+		return nil, err
+	}
+	// Turn into a signature-cyphertext Pair struct
+	var pair Pair
+	pair.Signature = signature
+	pair.Cyphertext = cyphertext
+	// Marshal Pair Struct
+	pairMarshal, err := json.Marshal(pair)
+	if err != nil {
+		err = errors.New("marshal(pair) error - hybrid-encrypt-and-sign")
+		return nil, err
+	}
+	return pairMarshal, nil
+}
+
+func createContentNodes(content []byte, fileKey []byte, fileMacKey []byte) (firstUUID uuid.UUID, lastUUID uuid.UUID, err error) {
+	userlib.DebugMsg("Creating content nodes for content of length: %d", len(content))
+
+	const NodeSize = 128
+
+	// For single node case (content fits in one node)
+	if len(content) <= NodeSize {
+		firstUUID = uuid.New()
+		lastUUID = firstUUID
+		nextUUID := uuid.New() // For sentinel node
+
+		// Create the single content node
+		chunk := make([]byte, NodeSize)
+		copy(chunk, content)
+
+		// Add padding - store the number of padding bytes in the padding
+		paddingSize := NodeSize - len(content)
+		for i := len(content); i < NodeSize; i++ {
+			chunk[i] = byte(paddingSize)
+		}
+
+		node := ContentNode{
+			Content:  chunk,
+			NextUUID: nextUUID,
+		}
+
+		userlib.DebugMsg("Single node case - content length: %d", len(content))
+		userlib.DebugMsg("Adding padding of size: %d", paddingSize)
+
+		// Marshal and encrypt node
+		nodeBytes, err := json.Marshal(node)
+		if err != nil {
+			return uuid.Nil, uuid.Nil, errors.New("node marshal failed - create content nodes")
+		}
+
+		nodePairBytes, err := symEncryptAndSign(nodeBytes, fileKey, fileMacKey)
+		if err != nil {
+			return uuid.Nil, uuid.Nil, errors.New("node encryption failed - create content nodes")
+		}
+
+		userlib.DatastoreSet(firstUUID, nodePairBytes)
+
+		// Create sentinel node
+		sentinel := make([]byte, NodeSize)
+		for i := range sentinel {
+			sentinel[i] = NodeSize
+		}
+
+		sentinelNode := ContentNode{
+			Content:  sentinel,
+			NextUUID: uuid.Nil,
+		}
+
+		sentinelBytes, err := json.Marshal(sentinelNode)
+		if err != nil {
+			return uuid.Nil, uuid.Nil, errors.New("sentinel marshal failed - create content nodes")
+		}
+
+		sentinelPairBytes, err := symEncryptAndSign(sentinelBytes, fileKey, fileMacKey)
+		if err != nil {
+			return uuid.Nil, uuid.Nil, errors.New("sentinel encryption failed - create content nodes")
+		}
+
+		userlib.DatastoreSet(nextUUID, sentinelPairBytes)
+
+		return firstUUID, lastUUID, nil
+	}
+
+	// For multiple node case
+	firstUUID = uuid.New()   // UUID of first node in list
+	currentUUID := firstUUID // Track current node being created
+	nextUUID := uuid.New()   // Track next node's UUID for linking
+
+	// Process content in 128-byte chunks to create linked list
+	for i := 0; i < len(content); i += NodeSize {
+		// Calculate bounds for current chunk
+		end := i + NodeSize
+		if end > len(content) {
+			end = len(content)
+		}
+		chunk := content[i:end]
+
+		userlib.DebugMsg("Processing chunk %d to %d", i, end)
+		userlib.DebugMsg("Chunk length: %d", len(chunk))
+
+		// Handle last piece of content differently than regular nodes
+		if end == len(content) {
+			lastUUID = currentUUID // Mark current UUID as last content node
+
+			// If chunk is not full size (128 bytes), add padding
+			// Padding bytes all have value equal to padding length
+			if len(chunk) < NodeSize {
+				padding := NodeSize - len(chunk)
+				paddingBytes := make([]byte, padding)
+				for j := range paddingBytes {
+					// Store padding length in all padding bytes
+					paddingBytes[j] = byte(padding)
+				}
+				chunk = append(chunk, paddingBytes...)
+			}
+
+			// Create last content node that points to upcoming sentinel
+			lastNode := ContentNode{
+				Content:  chunk,
+				NextUUID: nextUUID, // Points to where sentinel will be stored
+			}
+
+			// Marshal and encrypt last node
+			nodeBytes, err := json.Marshal(lastNode)
+			if err != nil {
+				return uuid.Nil, uuid.Nil, errors.New("last node marshal failed - createContentNodes")
+			}
+
+			nodePairBytes, err := symEncryptAndSign(nodeBytes, fileKey, fileMacKey)
+			if err != nil {
+				return uuid.Nil, uuid.Nil, errors.New("last node encryption failed - createContentNodes")
+			}
+
+			userlib.DatastoreSet(currentUUID, nodePairBytes)
+
+			// Create sentinel node (marks end of list)
+			// Sentinel content is 128 bytes all with value 128
+			sentinel := make([]byte, NodeSize)
+			for i := range sentinel {
+				sentinel[i] = NodeSize
+			}
+
+			// Create sentinel node with no next pointer (end of list)
+			sentinelNode := ContentNode{
+				Content:  sentinel,
+				NextUUID: uuid.Nil, // Indicates end of linked list
+			}
+
+			// Marshal and encrypt sentinel node
+			sentinelBytes, err := json.Marshal(sentinelNode)
+			if err != nil {
+				return uuid.Nil, uuid.Nil, errors.New("sentinel marshal failed - createContentNodes")
+			}
+
+			sentinelPairBytes, err := symEncryptAndSign(sentinelBytes, fileKey, fileMacKey)
+			if err != nil {
+				return uuid.Nil, uuid.Nil, errors.New("sentinel encryption failed - createContentNodes")
+			}
+
+			userlib.DatastoreSet(nextUUID, sentinelPairBytes)
+
+			return firstUUID, lastUUID, nil
+
+		} else {
+			// Create regular node that points to next node
+			node := ContentNode{
+				Content:  chunk,
+				NextUUID: nextUUID,
+			}
+
+			// Marshal and encrypt regular node
+			nodeBytes, err := json.Marshal(node)
+			if err != nil {
+				return uuid.Nil, uuid.Nil, errors.New("node marshal failed - createContentNodes")
+			}
+
+			nodePairBytes, err := symEncryptAndSign(nodeBytes, fileKey, fileMacKey)
+			if err != nil {
+				return uuid.Nil, uuid.Nil, errors.New("node encryption failed - createContentNodes")
+			}
+
+			userlib.DatastoreSet(currentUUID, nodePairBytes)
+
+			// Move to next node in list
+			currentUUID = nextUUID
+			nextUUID = uuid.New()
+		}
+	}
+
+	return uuid.Nil, uuid.Nil, errors.New("unexpected end of content processing - createContentNodes")
+}
